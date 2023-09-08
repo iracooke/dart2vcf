@@ -35,5 +35,6 @@ The [htslib](http://www.htslib.org/download/) suite of tools is recommended for 
 
 ### TODO
 
-- [] Infer ALT and REF alleles properly. Currently these are set to maj/min respectively but could be inferred from the `AlleleSequence` field
-- [] Parse CIGAR string to handle cases involving indels
+-[] Infer ALT and REF alleles properly. Currently these are set to maj/min respectively but could be inferred from the `AlleleSequence` field
+-[] Parse CIGAR string to handle cases involving indels
+-[] Use a tmp file for tag sequences so this can be cleaned up properly after running `bwa`
