@@ -16,6 +16,8 @@ parser = argparse.ArgumentParser(description='Convert DArT 2 line cvs to vcf')
 
 parser.add_argument('incsv',metavar='FILE',nargs='?',type=argparse.FileType('r'),help='DaRT csv file',default=sys.stdin)
 
+parser.add_argument('-o', '--vcfout',metavar='FILE',type=argparse.FileType('w'),help='Filename for vcf output',default=sys.stdout)
+
 parser.add_argument('-g', '--genome',type=str,help='Genome fasta. Used to find genomic coordinates',required=False)
 
 
@@ -95,7 +97,6 @@ optional_info = {
 # Column indexes for any of the above columns that exist in the file
 optional_info_indexes = { key: info_dict[key] for key in optional_info.keys() if info_dict.get(key)}
 
-#import pdb;pdb.set_trace()
 
 # If we specified the `-g` option, open a file for writing the sequences
 # This file will be used as input for bwa mem
@@ -108,14 +109,17 @@ if args.genome is not None:
 
 
 sample_names = []
+sample_tally = []
 
 for s in info_names[samples_start_col:]:
 	suff=""
-	ndups=sample_names.count(s)
+	ndups=sample_tally.count(s)
 	if ndups>0:
 		suff="_"+str(ndups)
 	sample_names.append(s+suff)
+	sample_tally.append(s)
 
+#import pdb;pdb.set_trace()
 
 
 n_samples=len(info_names[samples_start_col:])
@@ -176,92 +180,93 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	if seqs_file:
 		seqs_file.write(">"+ID+"\n"+line1_values[allele_sequence_c]+"\n")
 
+retained_vcfrows=[]
+if args.genome is not None:
+	# Map sequences
+	log.info("Mapping sequences with bwa")
 
-# Map sequences
-log.info("Mapping sequences with bwa")
+	seqs_bam_filename="seqs.bam"
 
-seqs_bam_filename="seqs.bam"
+	bwa_args=["bwa","mem",args.genome,seqs_filename]
 
-bwa_args=["bwa","mem",args.genome,seqs_filename]
+	bwa_result = subprocess.Popen(bwa_args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
-bwa_result = subprocess.Popen(bwa_args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+	mapping_records={}
 
-mapping_records={}
+	for line in iter(bwa_result.stdout.readline, b""):
+		line_parts = line.decode('ascii').strip().split('\t')
+		mapping_records[line_parts[0]] = mapping_records.get(line_parts[0],[])
+		mapping_records[line_parts[0]].append(line_parts)
 
-for line in iter(bwa_result.stdout.readline, b""):
-	line_parts = line.decode('ascii').strip().split('\t')
-	mapping_records[line_parts[0]] = mapping_records.get(line_parts[0],[])
-	mapping_records[line_parts[0]].append(line_parts)
-
-for line in iter(bwa_result.stderr.readline, b""):
-	log.info(line.decode('ascii').strip())
+	for line in iter(bwa_result.stderr.readline, b""):
+		log.info(line.decode('ascii').strip())
 
 
-n_dups=0
-n_unmapped=0
-n_unique=0
-n_indels=0
+	n_dups=0
+	n_unmapped=0
+	n_unique=0
+	n_indels=0
 
-perfect_cigar_re = re.compile("^([0-9]+)M$")
-snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
+	perfect_cigar_re = re.compile("^([0-9]+)M$")
+	snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
 
 # DArT IDs look like this 26525701|F|0-13:T>A-13
 # Note that the numerical range 0-13 indicates that there are 14 bases before the SNP
 # In other words, the SNP position is at 13 in 0-based system
 # VCF uses 1-based coordinates
 
-retained_vcfrows=[]
 
-for vcfid,vcfrow in vcf_records.items():
-	mappings = mapping_records.get(vcfid,[])
-	if len(mappings)==0:
-		n_unmapped+=1
-	elif len(mappings)>1:
-		n_dups+=1
-	elif perfect_cigar_re.search(mappings[0][5]) is None:
-		n_indels+=1
-	else:
 
-		flag=int(mappings[0][1])
-		# 4 : Read unmapped
-		# 16 : Read reverse strand
-		# 256 : Not primary alignment
-		# 
-		if (flag & 4) or (flag & 256):
+	for vcfid,vcfrow in vcf_records.items():
+		mappings = mapping_records.get(vcfid,[])
+		if len(mappings)==0:
 			n_unmapped+=1
+		elif len(mappings)>1:
+			n_dups+=1
+		elif perfect_cigar_re.search(mappings[0][5]) is None:
+			n_indels+=1
 		else:
-			vcfrow[0] = mappings[0][2]
-			base_pos = int(mappings[0][3]) # SAM pos so 
-			snp_pos_m = snp_pos_re.search(vcfid)
-			snp_pos = None
-			if snp_pos_m is None:
-				log.error("Unable to parse SNP position from ID "+vcfid)
+
+			flag=int(mappings[0][1])
+			# 4 : Read unmapped
+			# 16 : Read reverse strand
+			# 256 : Not primary alignment
+			# 
+			if (flag & 4) or (flag & 256):
+				n_unmapped+=1
 			else:
-				snp_pos=int(snp_pos_m.group(1)) # See note on DArT IDs above
+				vcfrow[0] = mappings[0][2]
+				base_pos = int(mappings[0][3]) # SAM pos so 
+				snp_pos_m = snp_pos_re.search(vcfid)
+				snp_pos = None
+				if snp_pos_m is None:
+					log.error("Unable to parse SNP position from ID "+vcfid)
+				else:
+					snp_pos=int(snp_pos_m.group(1)) # See note on DArT IDs above
 
-			seqlen = len(mappings[0][9])
+				seqlen = len(mappings[0][9])
 
-			if (flag & 16):
-				vcfrow[1]=str(base_pos + seqlen - snp_pos -1)
-			else:
-				vcfrow[1]=str(base_pos + snp_pos)
+				if (flag & 16):
+					vcfrow[1]=str(base_pos + seqlen - snp_pos -1)
+				else:
+					vcfrow[1]=str(base_pos + snp_pos)
 
-			retained_vcfrows.append(vcfrow)
-
-
-log.info("Retained "+
-	str(len(retained_vcfrows))+
-	" of "+
-	str(len(vcf_records))+
-	" loci. "+
-	str(n_dups)+" with duplicate mappings. "+
-	str(n_unmapped)+" unmapped. "+
-	str(n_indels)+" with complex CIGAR strings")
+				retained_vcfrows.append(vcfrow)
 
 
+	log.info("Retained "+
+		str(len(retained_vcfrows))+
+		" of "+
+		str(len(vcf_records))+
+		" loci. "+
+		str(n_dups)+" with duplicate mappings. "+
+		str(n_unmapped)+" unmapped. "+
+		str(n_indels)+" with complex CIGAR strings")
+else:
+	retained_vcfrows=vcf_records.values()
 
 # Writing the vcf
-vcfout=sys.stdout
+vcfout=args.vcfout
 
 
 # Construct the vcf header
