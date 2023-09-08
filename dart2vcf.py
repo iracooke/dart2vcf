@@ -45,32 +45,60 @@ for line in args.incsv:
 log.info("Skipped "+str(n_skip)+" header lines. Samples start at column "+str(samples_start_col))
 
 
-# Look for column indexes of important columns
-allele_sequence_c=None
-snp_id_c=None
+# convert column headers to a dictionary
 
-snp_count_c=None
-ref_count_c=None
+info_dict = {cn: ci for ci,cn in enumerate(info_names[0:samples_start_col])}
 
-ci=0
-for colname in info_names:
 
-	if colname=="AlleleSequence":
-		allele_sequence_c=ci
+#
+# Look for column indexes of essential columns
+#
+# The ID is usually given by AlleleID but sometimes MarkerName
+snp_id_c = info_dict['AlleleID'] if info_dict.get('AlleleID') is not None else info_dict['MarkerName']
 
-	if colname=="MarkerName" or colname=="AlleleID":
-		snp_id_c=ci
+# Used for genome mapping
+# The trimmed sequence is preferred here since adaptors will lead to clipping or mapping failure
+#
+allele_sequence_c = info_dict['TrimmedSequence'] if info_dict.get('TrimmedSequence') is not None else info_dict['AlleleSequence']
 
-	if colname=="AvgCountRefRaw" or colname=="AvgCountRef":
-		ref_count_c=ci
+# Some files have a suffix (raw/norm) appended to this important field
+ref_count_c = info_dict['AvgCountRef'] if info_dict.get('AvgCountRef') is not None else info_dict['AvgCountRefRaw']
+snp_count_c = info_dict['AvgCountSnp'] if info_dict.get('AvgCountSnp') is not None else info_dict['AvgCountSnpRaw']
 
-	if colname=="AvgCountSnpRaw" or colname=="AvgCountSnp":
-		snp_count_c=ci
+# All other INFO columns
+# Details on these columns obtained from maptk https://bitbucket.org/rokhsar-lab/gbs-analysis/src/master/bin/maptk
+#
+#
+# The SNP and CloneID fields are not included because they violates formatting requirement for INFO fields. All info in these fields is parsed and included anyway
+#
+optional_info = {
+#	'SNP':['String', 1, '"Contains the base position and base variant details"'],
+#	'CloneID':['String', 1, '"Unique identifier of the sequence tag"'],
+	'AvgCountRef':['Float', 1, '"The sum of the tag read counts for all samples, divided by the number of samples with non-zero tag read counts, for the Reference allele row"'],
+	'AvgCountSnp':['Float', 1, '"The sum of the tag read counts for all samples, divided by the number of samples with non-zero tag read counts, for the SNP allele row"'],
+	'AvgPIC':['Float', 1, '"The average of the polymorphism information content (PIC) of the Reference and SNP allele rows"'],
+	'CallRate':['Float', 1, '"The proportion of samples for which the genotype call is not absent"'],
+	'FreqHets':['Float', 1, '"The proportion of samples which score as heterozygous"'],
+	'FreqHomRef':['Float', 1, '"The proportion of samples which score as homozygous for the Reference allele"'],
+	'FreqHomSnp':['Float', 1, '"The proportion of samples which score as homozygous for the SNP allele"'],
+	'OneRatioRef':['Float', 1, '"The proportion of samples for which the genotype score is 1 in the Reference allele row"'],
+	'OneRatioSnp':['Float', 1, '"The proportion of samples for which the genotype score is 1 in the SNP allele row"'],
+	'NS':['Integer',1,'"Number of Samples With Data"'],
+	'PICSnp':['Float', 1, '"The polymorphism information content (PIC) for the SNP allele row"'],
+	'PICRef':['Float', 1, '"The polymorphism information content (PIC) for the Reference allele row"'],
+	'RepAvg':['Float', 1, '"The proportion of technical replicate assay pairs for which the marker score is consistent"'],
+	'SnpPosition':['Integer', 1, '"The position in the sequence tag at which the defined SNP variant base occurs"'],
+	'AlleleSequence':['String', 1, '"The sequence of the Reference allele"'],
+	'TrimmedSequence':['String', 1, '"Same as the full sequence, but with removed adapters in short marker tags"']
+}
 
-	ci+=1
+# Column indexes for any of the above columns that exist in the file
+optional_info_indexes = { key: info_dict[key] for key in optional_info.keys() if info_dict.get(key)}
 
+#import pdb;pdb.set_trace()
 
 # If we specified the `-g` option, open a file for writing the sequences
+# This file will be used as input for bwa mem
 seqs_file = None
 
 if args.genome is not None:
@@ -102,8 +130,11 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	line1_values = line1.strip().split(",")
 	line2_values = line2.strip().split(",")
 
+	# Placeholder values for genomic coordinates. If -g is specified these will be updated later
 	CHROM="chr0"
 	POS="0"
+
+
 	ID=line1_values[snp_id_c]
 
 
@@ -120,7 +151,13 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	ref_count = int(float(line2_values[ref_count_c]))
 	snp_count = int(float(line2_values[snp_count_c]))
 
-	INFO="DP="+str((ref_count+snp_count)*n_samples)
+	#  (String, no whitespace, semicolons, or equals-signs permitted; commas are permitted only as delimiters for lists of values)
+	# 
+	INFO = ["DP="+str((ref_count+snp_count)*n_samples)]
+	for field,index in optional_info_indexes.items():
+		INFO.append(field+"="+str(line2_values[index]))
+
+	INFO = ';'.join(INFO)
 
 	FORMAT="GT:AD"
 
@@ -145,7 +182,6 @@ log.info("Mapping sequences with bwa")
 
 seqs_bam_filename="seqs.bam"
 
-#bwa_args=["bwa","mem","-o",seqs_bam_filename,args.genome,seqs_filename]
 bwa_args=["bwa","mem",args.genome,seqs_filename]
 
 bwa_result = subprocess.Popen(bwa_args,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -170,8 +206,8 @@ perfect_cigar_re = re.compile("^([0-9]+)M$")
 snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
 
 # DArT IDs look like this 26525701|F|0-13:T>A-13
-# Note that the numerical range 0-13 indicates that there are 13 bases before the SNP
-# In other words, the SNP position is at 14 in a 1-based system or 13 in 0-based
+# Note that the numerical range 0-13 indicates that there are 14 bases before the SNP
+# In other words, the SNP position is at 13 in 0-based system
 # VCF uses 1-based coordinates
 
 retained_vcfrows=[]
@@ -204,6 +240,7 @@ for vcfid,vcfrow in vcf_records.items():
 				snp_pos=int(snp_pos_m.group(1)) # See note on DArT IDs above
 
 			seqlen = len(mappings[0][9])
+
 			if (flag & 16):
 				vcfrow[1]=str(base_pos + seqlen - snp_pos -1)
 			else:
@@ -232,6 +269,12 @@ vcfout=sys.stdout
 vcfout.write('##fileformat=VCFv4.3'+'\n')
 vcfout.write('##source=dart2vcf'+'\n')
 vcfout.write('##INFO=<ID=DP,Number=1,Type=Integer,Description="Approximate Total Depth">'+'\n')
+
+for infokey in optional_info_indexes.keys():
+	info_type,info_multiplicity,info_desc = optional_info[infokey]
+	vcfout.write('##INFO=<ID='+infokey+",Number="+str(info_multiplicity)+",Type="+info_type+",Description="+info_desc+'>'+'\n')
+
+
 vcfout.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">'+'\n')
 vcfout.write('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles in the order listed. Only locus average is provided">'+'\n')
 
@@ -239,9 +282,6 @@ vcf_samples_row = ["#CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMA
 vcf_samples_row.extend(sample_names)
 
 vcfout.write('\t'.join(vcf_samples_row)+'\n')
-
-# import pdb; pdb.set_trace()
-# print("hi")
 
 s1=sorted(retained_vcfrows,key=lambda row: int(row[1]))
 s2=sorted(s1, key=itemgetter(0))
