@@ -24,7 +24,7 @@ bwa index genome_ref.fasta
 
 ### Working with the vcf
 
-The vcf produced by this tool will contain all of the DArT locus info in the INFO field of the vcf. Genotypes are encoded as `a/b` where `a` is the allele (`1` or `0`) in the first row and `b` is the allele in the second row. 
+The vcf produced by this tool will contain all of the DArT locus info in the INFO field of the vcf. Genotypes are encoded as `a/b` where `a` is the allele (`1` or `0`) in the first row and `b` is the allele in the second row.  
 
 ### Requirements
 
@@ -32,3 +32,8 @@ The vcf produced by this tool will contain all of the DArT locus info in the INF
 
 The [htslib](http://www.htslib.org/download/) suite of tools is recommended for working with the resulting vcf. 
 
+
+### TODO
+
+- [] Infer ALT and REF alleles properly. Currently these are set to maj/min respectively but could be inferred from the `AlleleSequence` field
+- [] Parse CIGAR string to handle cases involving indels
