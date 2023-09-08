@@ -32,7 +32,7 @@ Chromosome/scaffold names are not added to the vcf header.  You can fix this iss
 
 ```bash
 bgzip mydart.vcf
-tabix mydart.vcf
+tabix mydart.vcf.gz
 bcftools view -h mydart.vcf
 ```
 
