@@ -26,6 +26,16 @@ bwa index genome_ref.fasta
 
 The vcf produced by this tool will contain all of the DArT locus info in the INFO field of the vcf. Genotypes are encoded as `a/b` where `a` is the allele (`1` or `0`) in the first row and `b` is the allele in the second row.  
 
+The vcf output from this tool is sorted alphabetically by chromosome/scaffold name and by position (within each chrom). 
+
+Chromosome/scaffold names are not added to the vcf header.  You can fix this issue by indexing the vcf
+
+```bash
+bgzip mydart.vcf
+tabix mydart.vcf
+bcftools view -h mydart.vcf
+```
+
 ### Requirements
 
 [bwa](https://github.com/lh3/bwa) is required for mapping genomic coordinates
