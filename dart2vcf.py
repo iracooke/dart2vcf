@@ -211,11 +211,11 @@ if args.genome is not None:
 	snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
 
 # DArT IDs look like this 26525701|F|0-13:T>A-13
-# Note that the numerical range 0-13 indicates that there are 14 bases before the SNP
-# In other words, the SNP position is at 13 in 0-based system
-# VCF uses 1-based coordinates
+# This indicates that the SNP position is at 13 in 0-based system
+# VCF uses 1-based coordinates and we must also account for tags that map on the other strand
 
-
+# This position refers to the position of the SNP within some original sequence .. aagggrrr so if 
+# we really want the exact position of the SNP there is no way to find it!
 
 	for vcfid,vcfrow in vcf_records.items():
 		mappings = mapping_records.get(vcfid,[])
