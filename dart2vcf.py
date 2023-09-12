@@ -12,14 +12,17 @@ from operator import itemgetter
 log = logging.getLogger()
 logging.basicConfig(stream=sys.stderr,level=logging.DEBUG)
 
-parser = argparse.ArgumentParser(description='Convert DArT 2 line cvs to vcf')
+parser = argparse.ArgumentParser(description='Convert DArT 2 line csv to vcf')
 
 parser.add_argument('incsv',metavar='FILE',nargs='?',type=argparse.FileType('r'),help='DaRT csv file',default=sys.stdin)
+
+parser.add_argument('-c', '--counts',metavar='FILE',type=argparse.FileType('r'),help='RawCounts file that matches variant calls',required=False)
 
 parser.add_argument('-o', '--vcfout',metavar='FILE',type=argparse.FileType('w'),help='Filename for vcf output',default=sys.stdout)
 
 parser.add_argument('-g', '--genome',type=str,help='Genome fasta. Used to find genomic coordinates',required=False)
 
+parser.add_argument('-b', '--use-batch',action='store_true',help='Disambiguate samples by prepending batch ids to sample IDs')
 
 args  = parser.parse_args()
 
@@ -28,6 +31,8 @@ args  = parser.parse_args()
 n_skip=0
 samples_start_col=0
 info_names = None
+batch_names = None
+batch_re = re.compile("^DHal")
 
 for line in args.incsv:
 	line_values = line.strip().split(",")
@@ -40,11 +45,33 @@ for line in args.incsv:
 					samples_start_col+=1
 				else:
 					break;
+		if batch_re.search(line_values[samples_start_col]):
+			batch_names=line_values[samples_start_col:]
 	else:
 		info_names=line_values
 		break;
 
 log.info("Skipped "+str(n_skip)+" header lines. Samples start at column "+str(samples_start_col))
+
+# If provided, read the header of the counts file and check that it is the same as the allele file
+if args.counts:
+	log.info("Reading RawCounts")
+	n_skip_check=0
+	for cline in args.counts:
+		line_values = cline.strip().split(",")
+
+		if line_values[0]=="*":
+			n_skip_check+=1
+		else:
+			# Check that info and sample names are the same in both files
+			if info_names!=line_values:
+				log.error("Column names are different in genotype and RawCounts files")
+				exit()
+			if n_skip_check!=n_skip:
+				log.error("Number of header lines are different in genotype and RawCounts files")
+				exit()
+			break;
+
 
 
 # convert column headers to a dictionary
@@ -52,16 +79,25 @@ log.info("Skipped "+str(n_skip)+" header lines. Samples start at column "+str(sa
 info_dict = {cn: ci for ci,cn in enumerate(info_names[0:samples_start_col])}
 
 
+# What type of data is this. DArTSeq of DArTTag
+
+data_type = "DTS" if info_dict.get('AlleleID') else "DTT"
+
+
 #
 # Look for column indexes of essential columns
 #
-# The ID is usually given by AlleleID but sometimes MarkerName
+# The ID is usually given by AlleleID but in DArTTag data it is given by MarkerName
 snp_id_c = info_dict['AlleleID'] if info_dict.get('AlleleID') is not None else info_dict['MarkerName']
 
 # Used for genome mapping
 # The trimmed sequence is preferred here since adaptors will lead to clipping or mapping failure
 #
 allele_sequence_c = info_dict['TrimmedSequence'] if info_dict.get('TrimmedSequence') is not None else info_dict['AlleleSequence']
+
+# Only present in some file types
+#
+snp_pos_c = info_dict.get('SnpPosition',None)
 
 # Some files have a suffix (raw/norm) appended to this important field
 ref_count_c = info_dict['AvgCountRef'] if info_dict.get('AvgCountRef') is not None else info_dict['AvgCountRefRaw']
@@ -108,10 +144,16 @@ if args.genome is not None:
 	seqs_file = open(seqs_filename,'w')
 
 
+
+raw_sample_names = [sn.replace(" ","").replace("\"","") for sn in info_names[samples_start_col:]]
+
+if args.use_batch:
+	raw_sample_names = [ bn+"_"+sn for bn,sn in zip(batch_names,raw_sample_names)]
+
+
 sample_names = []
 sample_tally = []
-
-for s in info_names[samples_start_col:]:
+for s in raw_sample_names:
 	suff=""
 	ndups=sample_tally.count(s)
 	if ndups>0:
@@ -119,7 +161,7 @@ for s in info_names[samples_start_col:]:
 	sample_names.append(s+suff)
 	sample_tally.append(s)
 
-#import pdb;pdb.set_trace()
+
 
 
 n_samples=len(info_names[samples_start_col:])
@@ -129,15 +171,20 @@ vcf_records={}
 allele_re = re.compile("([ATGC])>([ATGC])")
 
 
+rawcounts={}
+if args.counts:
+	for line1,line2 in itertools.zip_longest(*[args.counts]*2):
+		line1_values = line1.strip().split(",")
+		line2_values = line2.strip().split(",")
+		ID=line1_values[snp_id_c]
+		rawcounts[ID]=[line1_values[samples_start_col:],line2_values[samples_start_col:]]
 
 for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	line1_values = line1.strip().split(",")
 	line2_values = line2.strip().split(",")
 
-	# Placeholder values for genomic coordinates. If -g is specified these will be updated later
-	CHROM="chr0"
-	POS="0"
-
+	ref_seq = line1_values[allele_sequence_c]
+	snp_seq = line2_values[allele_sequence_c]
 
 	ID=line1_values[snp_id_c]
 
@@ -145,6 +192,42 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	m = allele_re.search(ID)
 	allele_maj = m.group(1)
 	allele_min = m.group(2)
+
+	if args.genome is not None:
+
+		snp_positions = [i for i, (ref, snp) in enumerate(zip(ref_seq,snp_seq)) if ((ref != snp) and len(set([ref,snp]) & set([allele_maj,allele_min]))==2 )  ]
+
+		if len(snp_positions)==0:
+			log.warning("Ref and Snp AlleleSequences are identical for "+ID+" skipping this SNP")
+			break;
+
+		snp_position=-1
+
+		if snp_pos_c is not None:
+			reported_snp_pos = int(line2_values[snp_pos_c])
+			if len(set(snp_positions) & set([reported_snp_pos]))!=1:
+				import pdb;pdb.set_trace()
+				log.error("Reported SNP position "+str(reported_snp_pos)+" does not match actual snp positions in AlleleSequence at "+str(snp_positions))
+				exit()
+			snp_position=reported_snp_pos
+		elif (len(snp_positions) > 1 ):
+			log.warning("Multiple potential SNP positions for "+ID+" only the first is recorded in the vcf")
+			snp_position = snp_positions[0]
+		else:
+			snp_position = snp_positions[0]
+
+
+		if snp_position==-1:
+			log.error("Unable to determine SNP position")
+			exit()
+
+		POS=str(snp_position)
+
+
+	# Placeholder values for genomic coordinates. If -g is specified these will be updated later
+	CHROM="<"+ID+">"
+	POS="0"
+
 
 	REF=allele_maj
 	ALT=allele_min
@@ -163,14 +246,23 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 
 	INFO = ';'.join(INFO)
 
-	FORMAT="GT:AD"
+
 
 	geno_1=line1_values[samples_start_col:]
 	geno_2=line2_values[samples_start_col:]
 
+	genotypes=[]
+	FORMAT="GT:AD"
 
+	if args.counts:
+		if rawcounts.get(ID)==None:
+			log.error("No counts for "+ID)
+			exit()
+		counts_a,counts_b=rawcounts[ID]
+		genotypes = [ a1.replace('-','.')+"/"+a2.replace('-','.')+":"+str(c1)+","+str(c2) for a1,a2,c1,c2 in zip(geno_1,geno_2,counts_a,counts_b) ]		
+	else:
+		genotypes = [ a1.replace('-','.')+"/"+a2.replace('-','.')+":"+str(ref_count)+","+str(snp_count) for a1,a2 in zip(geno_1,geno_2) ]
 
-	genotypes = [ a1.replace('-','.')+"/"+a2.replace('-','.')+":"+str(ref_count)+","+str(snp_count) for a1,a2 in zip(geno_1,geno_2) ]
 
 	vcf_row = [CHROM,POS,ID,REF,ALT,QUAL,FILTER,INFO,FORMAT]
 	vcf_row.extend(genotypes)
@@ -208,7 +300,7 @@ if args.genome is not None:
 	n_indels=0
 
 	perfect_cigar_re = re.compile("^([0-9]+)M$")
-	snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
+#	snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
 
 # DArT IDs look like this 26525701|F|0-13:T>A-13
 # This indicates that the SNP position is at 13 in 0-based system
@@ -237,12 +329,14 @@ if args.genome is not None:
 			else:
 				vcfrow[0] = mappings[0][2]
 				base_pos = int(mappings[0][3]) # SAM pos so 
-				snp_pos_m = snp_pos_re.search(vcfid)
-				snp_pos = None
-				if snp_pos_m is None:
-					log.error("Unable to parse SNP position from ID "+vcfid)
-				else:
-					snp_pos=int(snp_pos_m.group(1)) # See note on DArT IDs above
+
+
+#				snp_pos_m = snp_pos_re.search(vcfid)
+				snp_pos = int(vcfrow[1])
+				# if snp_pos_m is None:
+				# 	log.error("Unable to parse SNP position from ID "+vcfid)
+				# else:
+				# 	snp_pos=int(snp_pos_m.group(1)) # See note on DArT IDs above
 
 				seqlen = len(mappings[0][9])
 
@@ -281,7 +375,11 @@ for infokey in optional_info_indexes.keys():
 
 
 vcfout.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">'+'\n')
-vcfout.write('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles in the order listed. Only locus average is provided">'+'\n')
+
+if args.counts:
+	vcfout.write('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allele count for the ref and alt alleles in the order listed">'+'\n')
+else:
+	vcfout.write('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles in the order listed. Only locus average is provided">'+'\n')	
 
 vcf_samples_row = ["#CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT"]
 vcf_samples_row.extend(sample_names)

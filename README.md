@@ -1,6 +1,6 @@
 # DArT To VCF Conversion
 
-*WARNING:* This tool is under development. It currently does not map coordinates correctly.
+*WARNING:* This tool is under development. 
 
 Converts DArT 2 row formatted csv files to vcf. 
 
