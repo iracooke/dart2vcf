@@ -24,6 +24,18 @@ When using this option your genome ref should already be indexed, which you woul
 bwa index genome_ref.fasta
 ```
 
+DArT provides SNP information and raw counts in separate files.  If you want individual read counts for each genotype call you can use the option `-c` to provide the matching `RawCounts` file.
+
+```bash
+dart2vcf.py -g genome_ref.fasta Report_DHal_some_dart_file_SNP.csv  dart2vcf.py -c Report_DHal_some_dart_file_RawCounts.csv > dartfile.vcf
+```
+
+If you have data represented co-analysis across multiple batches there is a high chance of sample name collision.  To make it easier to properly identify samples you can use the `-b` option to prepend the batch ID to each sample
+
+```bash
+dart2vcf.py -g genome_ref.fasta Report_DHal_some_dart_file_SNP.csv  dart2vcf.py -c Report_DHal_some_dart_file_RawCounts.csv -b > dartfile.vcf
+```
+
 ### Working with the vcf
 
 The vcf produced by this tool will contain all of the DArT locus info in the INFO field of the vcf. Genotypes are encoded as `a/b` where `a` is the allele (`1` or `0`) in the first row and `b` is the allele in the second row.  
