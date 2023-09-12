@@ -190,6 +190,9 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 
 
 	m = allele_re.search(ID)
+	if m is None:
+		log.warning("Unable to parse alleles for "+ID+" skipping this SNP")
+		break
 	allele_maj = m.group(1)
 	allele_min = m.group(2)
 
