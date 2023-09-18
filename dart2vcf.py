@@ -24,6 +24,8 @@ parser.add_argument('-g', '--genome',type=str,help='Genome fasta. Used to find g
 
 parser.add_argument('-b', '--use-batch',action='store_true',help='Disambiguate samples by prepending batch ids to sample IDs')
 
+parser.add_argument('-m', '--ignore-pos',action='store_true',help='Ignore SNP position. Just place the SNP in the middle of the mapped region.')
+
 args  = parser.parse_args()
 
 
@@ -32,7 +34,7 @@ n_skip=0
 samples_start_col=0
 info_names = None
 batch_names = None
-batch_re = re.compile("^DHal")
+batch_re = re.compile("^D.*-[0-9]+")
 
 for line in args.incsv:
 	line_values = line.strip().split(",")
@@ -148,6 +150,9 @@ if args.genome is not None:
 raw_sample_names = [sn.replace(" ","").replace("\"","") for sn in info_names[samples_start_col:]]
 
 if args.use_batch:
+	if batch_names is None:
+		log.error("Use batch option specified but I was unable to find row for batch names")
+		exit()
 	raw_sample_names = [ bn+"_"+sn for bn,sn in zip(batch_names,raw_sample_names)]
 
 
@@ -192,26 +197,27 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	m = allele_re.search(ID)
 	if m is None:
 		log.warning("Unable to parse alleles for "+ID+" skipping this SNP")
-		break
+		continue;
 	allele_maj = m.group(1)
 	allele_min = m.group(2)
 
-	if args.genome is not None:
+	snp_positions = [i for i, (ref, snp) in enumerate(zip(ref_seq,snp_seq)) if ((ref != snp) and len(set([ref,snp]) & set([allele_maj,allele_min]))==2 )  ]
 
-		snp_positions = [i for i, (ref, snp) in enumerate(zip(ref_seq,snp_seq)) if ((ref != snp) and len(set([ref,snp]) & set([allele_maj,allele_min]))==2 )  ]
+	if len(snp_positions)==0:
+		log.warning("Ref and Snp AlleleSequences are identical for "+ID+" skipping this SNP")
+		continue;
 
-		if len(snp_positions)==0:
-			log.warning("Ref and Snp AlleleSequences are identical for "+ID+" skipping this SNP")
-			break;
+	snp_position=-1
 
-		snp_position=-1
-
+	if args.ignore_pos:
+		snp_position=int(len(ref_seq)/2)
+	else:
 		if snp_pos_c is not None:
 			reported_snp_pos = int(line2_values[snp_pos_c])
 			if len(set(snp_positions) & set([reported_snp_pos]))!=1:
-				import pdb;pdb.set_trace()
-				log.error("Reported SNP position "+str(reported_snp_pos)+" does not match actual snp positions in AlleleSequence at "+str(snp_positions))
-				exit()
+				log.error("Reported SNP position "+str(reported_snp_pos)+" does not match actual snp positions in AlleleSequence at "+str(snp_positions)+" skipping this SNP")
+				continue;
+
 			snp_position=reported_snp_pos
 		elif (len(snp_positions) > 1 ):
 			log.warning("Multiple potential SNP positions for "+ID+" only the first is recorded in the vcf")
@@ -220,16 +226,18 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 			snp_position = snp_positions[0]
 
 
-		if snp_position==-1:
+	if snp_position==-1:
+		if args.genome:
 			log.error("Unable to determine SNP position")
 			exit()
+		else:
+			snp_position=1
 
-		POS=str(snp_position)
+	POS=str(snp_position)
 
 
 	# Placeholder values for genomic coordinates. If -g is specified these will be updated later
 	CHROM="<"+ID+">"
-	POS="0"
 
 
 	REF=allele_maj
@@ -303,14 +311,23 @@ if args.genome is not None:
 	n_indels=0
 
 	perfect_cigar_re = re.compile("^([0-9]+)M$")
-#	snp_pos_re = re.compile("([0-9]+):[AGTC]>[AGTC]")
 
 # DArT IDs look like this 26525701|F|0-13:T>A-13
-# This indicates that the SNP position is at 13 in 0-based system
-# VCF uses 1-based coordinates and we must also account for tags that map on the other strand
+# **Mostly/Sometimes/Usually/Maybe** This indicates that the SNP position is at 13 in 0-based system
+# BUT 
+# ... sometimes the real position is reported in a separate column and it's different
+# ... sometimes the SNP position refers to an original sequence that is not included in the file so it is meaningless
+# ... sometimes the position is just plain wrong (Yes seriously!).
+# SO
+# Honestly all you really have is comparing the allele and ref sequences in the file. 
+# BUT
+# ... often there are multiple SNPs per tag. So in that case what are the alleles? Not the single bp major and minor allele reported.
+# SO
+# In conclusion you can
+# 1. Get the raw data and do the calls yourself
+# 2. Don't get too excited about precise positions. Near enough is good enough is OK right. That is the DArT way. 
+# 
 
-# This position refers to the position of the SNP within some original sequence .. aagggrrr so if 
-# we really want the exact position of the SNP there is no way to find it!
 
 	for vcfid,vcfrow in vcf_records.items():
 		mappings = mapping_records.get(vcfid,[])
@@ -318,7 +335,7 @@ if args.genome is not None:
 			n_unmapped+=1
 		elif len(mappings)>1:
 			n_dups+=1
-		elif perfect_cigar_re.search(mappings[0][5]) is None:
+		elif not args.genome and perfect_cigar_re.search(mappings[0][5]) is None:
 			n_indels+=1
 		else:
 
@@ -331,15 +348,9 @@ if args.genome is not None:
 				n_unmapped+=1
 			else:
 				vcfrow[0] = mappings[0][2]
-				base_pos = int(mappings[0][3]) # SAM pos so 
+				base_pos = int(mappings[0][3]) 
 
-
-#				snp_pos_m = snp_pos_re.search(vcfid)
 				snp_pos = int(vcfrow[1])
-				# if snp_pos_m is None:
-				# 	log.error("Unable to parse SNP position from ID "+vcfid)
-				# else:
-				# 	snp_pos=int(snp_pos_m.group(1)) # See note on DArT IDs above
 
 				seqlen = len(mappings[0][9])
 
@@ -358,7 +369,7 @@ if args.genome is not None:
 		" loci. "+
 		str(n_dups)+" with duplicate mappings. "+
 		str(n_unmapped)+" unmapped. "+
-		str(n_indels)+" with complex CIGAR strings")
+		str(n_indels)+" skipped due to complex CIGAR strings")
 else:
 	retained_vcfrows=vcf_records.values()
 
@@ -368,7 +379,7 @@ vcfout=args.vcfout
 
 # Construct the vcf header
 
-vcfout.write('##fileformat=VCFv4.3'+'\n')
+vcfout.write('##fileformat=VCFv4.1'+'\n')
 vcfout.write('##source=dart2vcf'+'\n')
 vcfout.write('##INFO=<ID=DP,Number=1,Type=Integer,Description="Approximate Total Depth">'+'\n')
 
