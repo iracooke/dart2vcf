@@ -66,12 +66,15 @@ if args.counts:
 			n_skip_check+=1
 		else:
 			# Check that info and sample names are the same in both files
-			if info_names!=line_values:
+			if info_names[0:samples_start_col]!=line_values[0:samples_start_col]:
 				log.error("Column names are different in genotype and RawCounts files")
+				print("Columns in 2row file",info_names)
+				print("Columns in counts file",line_values)
 				exit()
 			if n_skip_check!=n_skip:
-				log.error("Number of header lines are different in genotype and RawCounts files")
-				exit()
+
+				log.warn("Number of header lines are different in genotype and RawCounts files")
+#				exit()
 			break;
 
 
@@ -201,6 +204,9 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	allele_maj = m.group(1)
 	allele_min = m.group(2)
 
+	# This gets snp positions relative to given allele sequences in a 0-based coordinate system. 
+	# We keep this for now because it simplifies book keeping checks
+	# 
 	snp_positions = [i for i, (ref, snp) in enumerate(zip(ref_seq,snp_seq)) if ((ref != snp) and len(set([ref,snp]) & set([allele_maj,allele_min]))==2 )  ]
 
 	if len(snp_positions)==0:
@@ -233,7 +239,8 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 		else:
 			snp_position=1
 
-	POS=str(snp_position)
+	# Record position and add 1 to go from 0-based to 1-based (vcf) coords
+	POS=str(snp_position + 1)
 
 
 	# Placeholder values for genomic coordinates. If -g is specified these will be updated later
@@ -350,7 +357,8 @@ if args.genome is not None:
 				vcfrow[0] = mappings[0][2]
 				base_pos = int(mappings[0][3]) 
 
-				snp_pos = int(vcfrow[1])
+				# Here we need the snp pos in 0-based coords to subtract 1 to convert back
+				snp_pos = int(vcfrow[1]) - 1
 
 				seqlen = len(mappings[0][9])
 
