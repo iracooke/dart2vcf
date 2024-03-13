@@ -244,7 +244,14 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 
 
 	# Placeholder values for genomic coordinates. If -g is specified these will be updated later
-	CHROM="<"+ID+">"
+	#
+	# In case they are not replaced (-g not specified) they need cleaning up
+	#
+	# Contig names follow the same rules as the SAM format’s reference sequence names: they may contain any printable
+	# ASCII characters in the range [!-~] apart from ‘\ , "‘’ () [] {} <>’ and may not start with ‘*’ or ‘=’. 
+	# Since DArT loci names typically contain <> we need to replace those
+	#
+	CHROM=ID.replace(">",".gt.").replace("<",".lt.")
 
 
 	REF=allele_maj
