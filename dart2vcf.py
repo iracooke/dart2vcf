@@ -36,6 +36,8 @@ parser.add_argument('-g', '--genome',type=str,help='Genome fasta. Used to find g
 
 parser.add_argument('-b', '--use-batch',action='store_true',help='Disambiguate samples by prepending batch ids to sample IDs')
 
+parser.add_argument('-x', '--simplify-locus',action='store_true',help='Simplify locus identifiers to just the numerical prefix')
+
 parser.add_argument('-m', '--ignore-pos',action='store_true',help='Ignore SNP position. Just place the SNP in the middle of the mapped region.')
 
 args  = parser.parse_args()
@@ -263,7 +265,18 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 	# ASCII characters in the range [!-~] apart from ‘\ , "‘’ () [] {} <>’ and may not start with ‘*’ or ‘=’. 
 	# Since DArT loci names typically contain <> we need to replace those
 	#
-	CHROM=ID.replace(">",".gt.").replace("<",".lt.")
+	if args.simplify_locus:
+#		import pdb; pdb.set_trace()
+
+		chrom_re = re.compile("([^\\|]+)")
+		chrom_m = chrom_re.match(ID)
+		if chrom_m:
+			CHROM=chrom_m[1]
+		else:
+			log.error("Unable to simplify malformed locus ID "+ID)
+			CHROM=ID.replace(">",".gt.").replace("<",".lt.")
+	else:	
+		CHROM=ID.replace(">",".gt.").replace("<",".lt.")
 
 
 	REF=allele_maj
@@ -283,15 +296,10 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 
 	INFO = ';'.join(INFO)
 
-
-
-#	geno_1 = line1_values[samples_start_col:]
 	geno_1= [ flip_allele(g) for g in line1_values[samples_start_col:]]
 
 	geno_2 = line2_values[samples_start_col:]
-#	geno_2= [ flip_allele(g) for g in line2_values[samples_start_col:]]
 
-#	import pdb; pdb.set_trace()
 
 	genotypes=[]
 	FORMAT="GT:AD:DP"
