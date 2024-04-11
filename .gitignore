@@ -3,3 +3,4 @@ example
 *.bam
 *.fasta
 .DS_Store
+.Rproj.user

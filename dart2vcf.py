@@ -9,6 +9,18 @@ import logging
 import subprocess
 from operator import itemgetter
 
+
+def flip_allele(a):
+	if a=='1':
+		return('0')
+
+	if a=='0':
+		return('1')
+	return(a)
+
+
+
+
 log = logging.getLogger()
 logging.basicConfig(stream=sys.stderr,level=logging.DEBUG)
 
@@ -273,18 +285,23 @@ for line1,line2 in itertools.zip_longest(*[args.incsv]*2):
 
 
 
-	geno_1=line1_values[samples_start_col:]
-	geno_2=line2_values[samples_start_col:]
+#	geno_1 = line1_values[samples_start_col:]
+	geno_1= [ flip_allele(g) for g in line1_values[samples_start_col:]]
+
+	geno_2 = line2_values[samples_start_col:]
+#	geno_2= [ flip_allele(g) for g in line2_values[samples_start_col:]]
+
+#	import pdb; pdb.set_trace()
 
 	genotypes=[]
-	FORMAT="GT:AD"
+	FORMAT="GT:AD:DP"
 
 	if args.counts:
 		if rawcounts.get(ID)==None:
 			log.error("No counts for "+ID)
 			exit()
 		counts_a,counts_b=rawcounts[ID]
-		genotypes = [ a1.replace('-','.')+"/"+a2.replace('-','.')+":"+str(c1)+","+str(c2) for a1,a2,c1,c2 in zip(geno_1,geno_2,counts_a,counts_b) ]		
+		genotypes = [ a1.replace('-','.')+"/"+a2.replace('-','.')+":"+str(c1)+","+str(c2)+":"+str(int(c1)+int(c2)) for a1,a2,c1,c2 in zip(geno_1,geno_2,counts_a,counts_b) ]		
 	else:
 		genotypes = [ a1.replace('-','.')+"/"+a2.replace('-','.')+":"+str(ref_count)+","+str(snp_count) for a1,a2 in zip(geno_1,geno_2) ]
 
@@ -407,6 +424,7 @@ vcfout.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">'+'\n'
 
 if args.counts:
 	vcfout.write('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allele count for the ref and alt alleles in the order listed">'+'\n')
+	vcfout.write('##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read Depth">'+'\n')
 else:
 	vcfout.write('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles in the order listed. Only locus average is provided">'+'\n')	
 
